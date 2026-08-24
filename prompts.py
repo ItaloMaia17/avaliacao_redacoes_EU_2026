@@ -1,26 +1,28 @@
 """
-Prompts para as 6 condições experimentais: 3 técnicas (zero-shot, few-shot, CoT) x
-2 estruturas (holística, estruturada por competência).
+Construção dos prompts para as 6 condições do desenho fatorial 3x2
+(Seção 3.4 da metodologia).
+
+Inclui opcionalmente as rubricas de cada competência — recomendado para
+melhorar a qualidade da avaliação, especialmente em modo estruturado e CoT.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-COMPETENCIES = [
-    "Competência 1 — Domínio da modalidade escrita formal da língua portuguesa",
-    "Competência 2 — Compreensão da proposta e aplicação de conceitos das áreas de conhecimento",
-    "Competência 3 — Organização e seleção de informações, fatos, opiniões e argumentos",
-    "Competência 4 — Uso de mecanismos linguísticos para a construção da argumentação",
-    "Competência 5 — Elaboração de proposta de intervenção",
-]
-VALID_SCORES = [0, 40, 80, 120, 160, 200]
+from projeto_tcc.competencies import (
+    COMPETENCY_DESCRIPTIONS,
+    N_COMPETENCIES,
+    VALID_SCORES,
+    format_rubrics_for_prompt,
+)
 
 TECHNIQUES = ("zero-shot", "few-shot", "cot")
 STRUCTURES = ("holistica", "estruturada")
 
 
 def _essay_block(essay: dict[str, Any]) -> str:
+    """Monta o bloco com texto motivador, proposta e redação a avaliar."""
     return (
         f"Texto motivador:\n{essay['supporting_text']}\n\n"
         f"Proposta de redação:\n{essay['prompt']}\n\n"
@@ -29,20 +31,21 @@ def _essay_block(essay: dict[str, Any]) -> str:
 
 
 def _output_schema_instructions(structure: str) -> str:
+    """Instruções sobre o formato esperado da resposta (JSON)."""
     if structure == "holistica":
         return (
             "Responda SOMENTE em JSON válido, sem texto antes ou depois, no formato:\n"
-            '{"nota_final": <inteiro de 0 a 1000>, "justificativa": "<texto>"}'
+            '{"nota_final": <inteiro de 0 a 1000>, "justificativa": "<texto até 100 caracteres>"}'
         )
 
     campos = ",\n".join(
-        f'  "competencia_{i}": {{"nota": <um dos valores {VALID_SCORES}>, '
+        f'  "competencia_{i}": {{"nota": <um dos valores {sorted(VALID_SCORES)}>, '
         f'"justificativa": "<texto>"}}'
-        for i in range(1, 6)
+        for i in range(1, N_COMPETENCIES + 1)
     )
     return (
         "Responda SOMENTE em JSON válido, sem texto antes ou depois, com uma "
-        "nota e uma justificativa para cada uma das cinco competências, no "
+        "nota e uma justificativa de até 100 caracteres para cada uma das cinco competências, no "
         "formato:\n{\n" + campos + "\n}"
     )
 
@@ -52,13 +55,21 @@ def build_prompt(
     technique: str,
     structure: str,
     few_shot_examples: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
+    include_rubrics: bool = True,
 ) -> dict[str, str]:
     """Monta o prompt (system + user) para uma das 6 condições experimentais.
 
-    `few_shot_examples`: lista de até 2 tuplas (redação_exemplo, notas_exemplo)
-    fixas, idênticas para todos os modelos e todas as redações (Seção 3.4).
-    `notas_exemplo` deve ter o mesmo formato esperado na saída (ver
-    `_output_schema_instructions`).
+    Args:
+        essay: redação a avaliar, com campos: essay_text, supporting_text, prompt, etc.
+        technique: "zero-shot", "few-shot", ou "cot"
+        structure: "holistica" ou "estruturada"
+        few_shot_examples: lista de tuplas (redação_exemplo, notas_exemplo).
+                          Fixas e idênticas para todos os modelos.
+        include_rubrics: se True (padrão), inclui as rubricas completas no system prompt.
+                        Melhora a qualidade, mas adiciona ~1.200 tokens.
+
+    Returns:
+        dict com chaves "system" e "user" — pronto para chamar a API.
     """
     if technique not in TECHNIQUES:
         raise ValueError(f"technique deve ser um de {TECHNIQUES}")
@@ -69,17 +80,18 @@ def build_prompt(
         "Você é um avaliador especializado em correção de redações do ENEM.",
         "Avalie a redação a seguir segundo a matriz de referência do ENEM, "
         "que considera as seguintes competências:",
-        "\n".join(COMPETENCIES),
+        COMPETENCY_DESCRIPTIONS,
     ]
-    system_parts.append(
-    "Sua resposta deve conter apenas um objeto JSON válido. "
-    "Não utilize markdown, não utilize blocos ```json e não escreva qualquer texto fora do JSON."
-    )
+
+    # Rubricas completas (opcional, mas recomendado)
+    if include_rubrics:
+        system_parts.append(format_rubrics_for_prompt(include_full=True))
 
     if structure == "estruturada":
         system_parts.append(
             "Atribua uma nota individual para cada competência, dentro do "
-            f"conjunto de valores válidos {VALID_SCORES}."
+            f"conjunto de valores válidos {sorted(VALID_SCORES)}. "
+            "A justificativa deve explicar qual nível de rubrica foi atingido e por quê."
         )
     else:
         system_parts.append(
@@ -89,21 +101,23 @@ def build_prompt(
 
     if technique == "cot":
         system_parts.append(
-            "Antes de atribuir a nota final, apresente explicitamente as "
-            "etapas de sua análise (leitura da proposta, identificação da "
-            "tese, avaliação da argumentação e da proposta de intervenção) "
-            "dentro do(s) campo(s) 'justificativa'."
+            "Antes de atribuir a(s) nota(s) final(is), apresente explicitamente "
+            "as etapas de sua análise: (1) leitura e compreensão da proposta, "
+            "(2) identificação da tese e argumentação, (3) avaliação de cada competência "
+            "com base nas rubricas fornecidas, (4) proposta de intervenção. "
+            "Estruture seu raciocínio de forma clara."
         )
 
     system_parts.append(_output_schema_instructions(structure))
     system_prompt = "\n\n".join(system_parts)
 
+    # User prompt
     user_parts: list[str] = []
     if technique == "few-shot":
         if not few_shot_examples:
             raise ValueError(
                 "technique='few-shot' exige `few_shot_examples` "
-                "(2 exemplos fixos, ver Seção 3.4)."
+                "(2 exemplos fixos, com nota 560 e 880)."
             )
         user_parts.append("Exemplos de redações já corrigidas:\n")
         for i, (ex_essay, ex_scores) in enumerate(few_shot_examples, start=1):

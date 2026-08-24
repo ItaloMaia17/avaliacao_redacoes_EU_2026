@@ -27,12 +27,12 @@ from typing import Any
 
 from sklearn.metrics import cohen_kappa_score, mean_absolute_error
 
-VALID_COMPETENCY_SCORES = (0, 40, 80, 120, 160, 200)
+from projeto_tcc.competencies import VALID_SCORES
 COMPETENCY_KEYS = [f"competencia_{i}" for i in range(1, 6)]
 
 
 def snap_to_valid_scale(
-    value: float, valid: tuple[int, ...] = VALID_COMPETENCY_SCORES
+    value: float, valid: list[int] = VALID_SCORES
 ) -> int:
     """Arredonda uma nota de competência prevista pelo modelo para o valor
     válido mais próximo do conjunto discreto {0,40,80,120,160,200}.
