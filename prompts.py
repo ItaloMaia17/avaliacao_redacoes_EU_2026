@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from projeto_tcc.competencies import (
+from competencies import (
     COMPETENCY_DESCRIPTIONS,
     N_COMPETENCIES,
     VALID_SCORES,
