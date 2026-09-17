@@ -52,9 +52,9 @@ Os resultados são salvos em `data/results/`.
 ### 4. Calcular métricas
 
 ```bash
-python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b
+python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b --diagnose-discarded
 
-python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b 
+python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b --diagnose-discarded
 ```
 
 ## Observações

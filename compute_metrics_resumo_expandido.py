@@ -12,9 +12,9 @@ Desenho do experimento:
 A nota geral do modelo é calculada pela soma das cinco competências.
 
 Uso:
-    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b
+    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b --diagnose-discarded
 
-    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b
+    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b --diagnose-discarded
 """
 
 from __future__ import annotations
@@ -174,6 +174,73 @@ def print_consistency(result: dict[str, Any]) -> None:
     )
 
 
+def diagnose_discarded_essays(
+    results: list[dict[str, Any]],
+    essays_by_key: dict[str, dict[str, Any]],
+    structure: str,
+    reference: str | None = None,
+) -> list[tuple[str, list[str]]]:
+    """Lista todas as redações da amostra que foram descartadas e por quê."""
+    diagnostics: list[tuple[str, list[str]]] = []
+    selected_keys = sorted(essays_by_key)
+
+    for essay_key in selected_keys:
+        essay = essays_by_key[essay_key]
+        reasons: list[str] = []
+
+        entries = [
+            r for r in results
+            if r.get("essay_key") == essay_key
+            and r.get("phase") == "consistencia"
+            and r.get("run_index") == 0
+        ]
+
+        if not entries:
+            reasons.append("sem resultado válido em run_index=0 da fase 'consistencia'")
+        else:
+            for entry in entries:
+                if entry.get("parse_failed"):
+                    reasons.append(f"parse_failed: {entry.get('failure_reason') or 'motivo desconhecido'}")
+                    break
+
+                model_total = model_total_from_parsed(entry.get("parsed_output"), structure)
+                if model_total is None:
+                    reasons.append("modelo retornou JSON sem total válido para a estrutura solicitada")
+                    break
+
+        annotations = essay.get("annotations") or []
+        refs = {a.get("reference"): a for a in annotations if isinstance(a, dict) and a.get("reference")}
+
+        if reference is not None:
+            if reference not in refs:
+                reasons.append(f"avaliador humano ausente: {reference}")
+            else:
+                human_total = refs[reference].get("total")
+                if human_total is None:
+                    reasons.append(f"avaliador humano {reference} sem 'total' válido")
+        else:
+            if not annotations:
+                reasons.append("sem anotações humanas")
+            elif not any(a.get("total") is not None for a in annotations if isinstance(a, dict)):
+                reasons.append("nenhuma anotação humana com 'total' válido")
+
+        if reasons:
+            diagnostics.append((essay_key, reasons))
+
+    return diagnostics
+
+
+def print_diagnostics(diagnostics: list[tuple[str, list[str]]], label: str) -> None:
+    print(f"\n=== Diagnóstico de descartes — {label} ===")
+    if not diagnostics:
+        print("  Nenhuma redação descartada.")
+        return
+
+    print(f"  {len(diagnostics)} redação(ões) descartada(s):")
+    for essay_key, reasons in diagnostics:
+        print(f"  - {essay_key}: { '; '.join(reasons)}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Avalia precisão (QWK total) e consistência (std/CV total) para o resumo expandido."
@@ -199,6 +266,11 @@ def main() -> None:
         default=None,
         help="Filtra o arquivo de resultados para um modelo específico. Ex.: gpt-oss-120b",
     )
+    parser.add_argument(
+        "--diagnose-discarded",
+        action="store_true",
+        help="Lista as redações descartadas na amostra e o motivo exato do descarte.",
+    )
     args = parser.parse_args()
 
     essays_raw = load_jsonl(args.essays)
@@ -210,6 +282,16 @@ def main() -> None:
     sampled_essays_by_key = {k: essays_by_key[k] for k in selected_keys if k in essays_by_key}
 
     print(f"[info] amostra selecionada com seed 42: {len(selected_keys)} redações")
+
+    if args.diagnose_discarded:
+        print_diagnostics(
+            diagnose_discarded_essays(results := load_jsonl(args.results), sampled_essays_by_key, args.structure),
+            label="agregado",
+        )
+        print_diagnostics(
+            diagnose_discarded_essays(load_jsonl(args.results), sampled_essays_by_key, args.structure, reference="grader_a"),
+            label="grader_a",
+        )
 
     results = load_jsonl(args.results)
     if args.model:
