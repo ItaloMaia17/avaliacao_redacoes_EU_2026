@@ -13,8 +13,13 @@ import argparse
 import json
 from typing import Any
 
-from projeto_tcc.metrics import COMPETENCY_KEYS, consistency_metrics, human_human_agreement, precision_metrics
 
+from metrics2 import (
+    COMPETENCY_KEYS,
+    consistency_metrics,
+    human_human_agreement,
+    precision_metrics,
+)
 
 def load_jsonl(path: str) -> list[dict[str, Any]]:
     with open(path, encoding="utf-8") as f:

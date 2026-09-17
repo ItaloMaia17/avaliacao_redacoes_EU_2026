@@ -27,7 +27,7 @@ from typing import Any
 
 from sklearn.metrics import cohen_kappa_score, mean_absolute_error
 
-from projeto_tcc.competencies import VALID_SCORES
+from competencies import VALID_SCORES
 COMPETENCY_KEYS = [f"competencia_{i}" for i in range(1, 6)]
 
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 from competencies import (
-    COMPETENCY_DESCRIPTIONS,
     N_COMPETENCIES,
     VALID_SCORES,
     format_rubrics_for_prompt,
@@ -35,18 +34,22 @@ def _output_schema_instructions(structure: str) -> str:
     if structure == "holistica":
         return (
             "Responda SOMENTE em JSON válido, sem texto antes ou depois, no formato:\n"
-            '{"nota_final": <inteiro de 0 a 1000>, "justificativa": "<texto até 100 caracteres>"}'
+            '{"nota_final": <inteiro de 0 a 1000>}'
         )
 
+    # campos = ",\n".join(
+    #     f'  "competencia_{i}": {{"nota": <um dos valores {sorted(VALID_SCORES)}>, '
+    #     f'"justificativa": "<texto>"}}'
+    #     for i in range(1, N_COMPETENCIES + 1)
+    # )
     campos = ",\n".join(
-        f'  "competencia_{i}": {{"nota": <um dos valores {sorted(VALID_SCORES)}>, '
-        f'"justificativa": "<texto>"}}'
+        f'  "competencia_{i}": <um dos valores {sorted(VALID_SCORES)}>'
         for i in range(1, N_COMPETENCIES + 1)
     )
     return (
-        "Responda SOMENTE em JSON válido, sem texto antes ou depois, com uma "
-        "nota e uma justificativa de até 100 caracteres para cada uma das cinco competências, no "
-        "formato:\n{\n" + campos + "\n}"
+        "Responda SOMENTE em JSON válido, sem texto antes ou depois, "
+        "contendo apenas a nota de cada competência, no formato:\n"
+        "{\n" + campos + "\n}"
     )
 
 
@@ -78,20 +81,18 @@ def build_prompt(
 
     system_parts = [
         "Você é um avaliador especializado em correção de redações do ENEM.",
-        "Avalie a redação a seguir segundo a matriz de referência do ENEM, "
-        "que considera as seguintes competências:",
-        COMPETENCY_DESCRIPTIONS,
+        "Avalie a redação segundo a matriz de referência do ENEM.",
     ]
 
     # Rubricas completas (opcional, mas recomendado)
     if include_rubrics:
-        system_parts.append(format_rubrics_for_prompt(include_full=True))
+        system_parts.append(format_rubrics_for_prompt(include_full=False))
 
     if structure == "estruturada":
         system_parts.append(
             "Atribua uma nota individual para cada competência, dentro do "
             f"conjunto de valores válidos {sorted(VALID_SCORES)}. "
-            "A justificativa deve explicar qual nível de rubrica foi atingido e por quê."
+            "Não forneça justificativas, explicações ou comentários."
         )
     else:
         system_parts.append(
@@ -101,11 +102,15 @@ def build_prompt(
 
     if technique == "cot":
         system_parts.append(
-            "Antes de atribuir a(s) nota(s) final(is), apresente explicitamente "
-            "as etapas de sua análise: (1) leitura e compreensão da proposta, "
-            "(2) identificação da tese e argumentação, (3) avaliação de cada competência "
-            "com base nas rubricas fornecidas, (4) proposta de intervenção. "
-            "Estruture seu raciocínio de forma clara."
+            # "Antes de atribuir a(s) nota(s) final(is), apresente explicitamente "
+            # "as etapas de sua análise: (1) leitura e compreensão da proposta, "
+            # "(2) identificação da tese e argumentação, (3) avaliação de cada competência "
+            # "com base nas rubricas fornecidas, (4) proposta de intervenção. "
+            # "Estruture seu raciocínio de forma clara."
+            "Analise cuidadosamente a redação passo a passo antes de atribuir "
+            "a(s) nota(s). Considere a proposta, a tese, a argumentação e os "
+            "critérios de cada competência. Não apresente o raciocínio, análise "
+            "ou justificativas na resposta final. Retorne somente o JSON solicitado."
         )
 
     system_parts.append(_output_schema_instructions(structure))
@@ -129,6 +134,17 @@ def build_prompt(
 
     user_parts.append(_essay_block(essay))
     user_prompt = "\n".join(user_parts)
+
+    # print("SYSTEM:", len(system_prompt), "caracteres")
+    # print("USER:", len(user_prompt), "caracteres")
+    # print(
+    #     "RUBRICAS:",
+    #     len(format_rubrics_for_prompt(include_full=False))
+    # )
+    # print(
+    #     "ESSAY BLOCK:",
+    #     len(_essay_block(essay))
+    # )
 
     return {"system": system_prompt, "user": user_prompt}
 
