@@ -1,20 +1,20 @@
 """
-Avaliação do resumo expandido.
+Avaliação do experimento.
 
 Desenho do experimento:
-- Precisão: QWK da nota geral modelo × humana
+- Precisão: QWK da nota geral modelo X humana
 - Consistência: desvio padrão e coeficiente de variação (CV) da nota geral
   entre 3 execuções independentes da mesma redação
-- Amostra: 100 redações selecionadas aleatoriamente
+- Amostra: 100 redações selecionadas aleatoriamente com seed=42
 - Técnica: zero-shot
 - Estrutura: estruturada por competência do ENEM
 
 A nota geral do modelo é calculada pela soma das cinco competências.
 
 Uso:
-    python compute_metrics_resumo_expandido.py \
-        --results data/results/zero-shot_estruturada.jsonl \
-        --structure estruturada
+    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b
+
+    python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b
 """
 
 from __future__ import annotations

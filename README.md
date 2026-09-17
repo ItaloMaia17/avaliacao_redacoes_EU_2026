@@ -1,74 +1,64 @@
-# Pipeline de pré-processamento e teste piloto — AES ENEM
+# Avaliação automática de redações do ENEM
 
-Implementa a Seção 3 (Metodologia) sobre o subconjunto `sourceAWithGraders`
-do dataset `kamel-usp/aes_enem_dataset` (Silveira, Barbosa e Mauá, 2024).
+Este projeto avalia se modelos de linguagem conseguem atribuir notas a redações do ENEM de forma próxima às avaliações humanas. O estudo usa o subconjunto `sourceAWithGraders` do dataset `kamel-usp/aes_enem_dataset` e compara dois aspectos principais:
 
-## Arquivos
+- precisão: proximidade entre as notas do modelo e as notas humanas;
+- consistência: estabilidade das notas em execuções repetidas da mesma redação.
 
-- `preprocessing.py` — verificação de integridade, agrupamento para
-  inferência (uma redação → múltiplas notas humanas) e limpeza textual.
-- `prompts.py` — construção dos prompts para as 6 condições do desenho
-  fatorial 3x2 (zero-shot/few-shot/CoT × holística/estruturada).
-- `models.py` — identificadores dos 5 modelos selecionados no OpenRouter.
-- `run_experiment.py` — roda um teste piloto (N redações, 1 modelo,
-  1 condição) via OpenRouter.
-- `data/sample_raw.jsonl` — 7 linhas de amostra (5 reais e truncadas + 2
-  sintéticas inválidas) para testar o pipeline **sem rede e sem gastar
-  cota de API**. Inclui um caso real de uma redação com 2 avaliadores e
-  um caso real do bug de `id` duplicado entre temas diferentes.
+## Desenho experimental
 
-## Passo 1 — Pré-processamento
+- técnicas: `zero-shot`
+- estruturas: `estruturada`
+- consistência: `redações avaliadas 3 vezes` para medir a variabilidade na saída dos modelos
+- objetivo geral: medir desempenho em correção automática de redações do ENEM em termos de precisão e consistência
 
-Com o dataset completo (requer rede):
+## Arquivos principais
+
+- `preprocessing.py` — validação e agrupamento do corpus
+- `prompts.py` — construção dos prompts para a condição experimental
+- `models.py` — modelos usados via Groq
+- `run_experiments.py` — execução do experimento
+- `compute_metrics_resumo_expandido.py` — cálculo de QWK e consistência
+- `explore_corpus.py` — análise exploratória do corpus
+
+## Fluxo do projeto
+
+### 1. Pré-processamento
 
 ```bash
 pip install -r requirements.txt
 python preprocessing.py
-# gera data/processed_essays.jsonl
 ```
 
-Para testar a lógica sem rede, usando a amostra:
+Gera `data/processed_essays.jsonl`.
 
-```python
-from preprocessing import load_rows_from_jsonl, group_rows, save_processed
-
-rows = load_rows_from_jsonl("data/sample_raw.jsonl")
-essays, discarded = group_rows(rows)
-save_processed(essays, "data/processed_essays.jsonl")
-```
-
-## Passo 2 — Validar os prompts (sem custo de API)
+### 2. Validar prompts
 
 ```bash
-python run_experiment.py --technique zero-shot --structure estruturada \
-    --n 2 --data data/processed_essays.jsonl --dry-run
+python run_experiments.py --dry-run
 ```
 
-Isso monta os prompts reais e imprime um trecho de cada um, sem chamar a
-API — útil para revisar a redação do prompt antes de gastar cota.
+Verifica a montagem dos prompts sem chamar a API.
 
-## Passo 3 — Teste piloto real
+### 3. Rodar experimento
 
 ```bash
-export OPENROUTER_API_KEY="sk-or-..."
-python run_experiment.py --model llama-3.2-3b --technique zero-shot \
-    --structure holistica --n 3 --temperature 0 --seed 42
-# gera data/pilot_results.jsonl
+export GROQ_API_KEY="sk-or-..."
+python run_experiments.py
 ```
 
-## Pendências antes de rodar os experimentos completos
+Os resultados são salvos em `data/results/`.
 
-1. **Confirmar os slugs exatos no OpenRouter** para `gemma-4-31b` e
-   `ministral-3b` em <https://openrouter.ai/models> — são modelos recentes
-   e o identificador usado aqui pode estar desatualizado.
-2. **Definir os 2 exemplos fixos de few-shot** em formato compatível com
-   `prompts.build_prompt` (ver `NotImplementedError` em `run_experiment.py`).
-   Os exemplos devem ser os mesmos para todos os modelos e todas as
-   redações (Seção 3.4).
-3. **Confirmar se o provedor escolhido no OpenRouter respeita `seed`** para
-   cada um dos 5 modelos — nem todo provedor de inferência o faz; isso
-   afeta a reprodutibilidade discutida na Seção 3.5.
-4. Este projeto ainda não calcula QWK/MAE/desvio padrão/CV (Seção 3.6) —
-   ele cobre pré-processamento + geração de respostas. O cálculo de
-   métricas é um próximo passo natural, uma vez que `pilot_results.jsonl`
-   esteja populado com saídas reais dos modelos.
+### 4. Calcular métricas
+
+```bash
+python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model gpt-oss-120b
+
+python compute_metrics_resumo_expandido.py --results data/results/zero-shot_estruturada.jsonl --structure estruturada --model qwen3.8-27b 
+```
+
+## Observações
+
+- a chave real da redação é formada por `id_prompt + id`;
+- o conjunto inclui múltiplas avaliações humanas por redação;
+- o projeto foi pensado para permitir execução local, teste sem rede e análise de resultados em conjunto.

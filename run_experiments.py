@@ -1,20 +1,19 @@
 """
-Roda os experimentos de avaliação automática de redações via OpenRouter,
-cobrindo o desenho fatorial 3x2 (técnica x estrutura) para um ou mais
-modelos (Seção 3.4 da metodologia).
+Roda os experimentos de avaliação automática de redações via Groq
 
 Uso:
-    export OPENROUTER_API_KEY="sk-or-..."
+    export GROQ_API_KEY="gsk_..."
 
     # tudo: todos os modelos, todas as técnicas/estruturas, fase precisão
     python run_experiments.py
 
-    # um recorte específico
-    python run_experiments.py --models llama-3.2-3b gpt-4o-mini \
-        --techniques zero-shot cot --structures holistica
+    # Recorte específico para o resumo expandido
+    python run_experiments.py --models qwen3.8-27b --techniques zero-shot --structures estruturada --phase consistencia --repeats 3 --n 100
 
-    # fase de consistência (5 execuções por redação)
-    python run_experiments.py --phase consistencia --repeats 5
+    python run_experiments.py --models gpt-oss-120b --techniques zero-shot --structures estruturada --phase consistencia --repeats 3 --n 100
+
+    # fase de consistência (3 execuções por redação)
+    python run_experiments.py --phase consistencia --repeats 3
 
     # validar prompts sem gastar cota
     python run_experiments.py --dry-run
@@ -38,22 +37,37 @@ from pathlib import Path
 from typing import Any, Callable
 
 from dotenv import load_dotenv
-import requests
+import groq
+from groq import Groq
 
 from models import MODELS
 from prompts import build_prompt, TECHNIQUES, STRUCTURES
 
 load_dotenv()
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-JSON_FORMAT_MODELS = {"qwen/qwen3-next-80b-a3b", "google/gemma-4-31b"}
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# max_retries=0: desligamos o retry interno do SDK do Groq porque queremos
+# o nosso próprio (com checkpoint, log por tentativa e backoff configurável).
+GROQ_CLIENT = Groq(max_retries=0)
+
+RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 NON_RETRYABLE_STATUS = {400, 401, 403, 404, 422}
-REASONING_BY_TECHNIQUE: dict[str, dict[str, Any]] = {
-    "zero-shot": {"effort": "none"},
-    "few-shot": {"effort": "none"},
-    "cot": {"effort": "high"},
-}
+
+# reasoning_effort aceita valores diferentes por família de modelo no Groq:
+#   - gpt-oss (20b/120b): só "low" | "medium" | "high" — NÃO aceita "none" (dá 400).
+#   - qwen (qwen3.x): aceita "none" | "default" (e "low/medium/high" em alguns).
+# Por isso o mapeamento é por família, não um único valor fixo por técnica.
+REASONING_EFFORT_RULES: list[tuple[str, dict[str, str]]] = [
+    ("gpt-oss", {"zero-shot": "low", "few-shot": "low", "cot": "high"}),
+    ("qwen", {"zero-shot": "none", "few-shot": "none", "cot": "high"}),
+]
+
+
+def _reasoning_effort_for(model_id: str, technique: str) -> str | None:
+    """None = não manda o parâmetro (modelo não é da família reasoning conhecida)."""
+    for substring, mapping in REASONING_EFFORT_RULES:
+        if substring in model_id:
+            return mapping.get(technique)
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -67,14 +81,14 @@ class RateLimitError(Exception):
 
 
 class TransientAPIError(Exception):
-    """5xx / rede — vale tentar de novo."""
+    """5xx / rede / 408 / 409 — vale tentar de novo."""
 
 
 class NonRetryableAPIError(Exception):
     """4xx que não é rate limit — não adianta repetir."""
 
 
-def call_with_retry(func: Callable[[], Any], max_retries: int = 5,
+def call_with_retry(func: Callable[[], Any], max_retries: int = 7,
                      base_delay: float = 1.0, max_delay: float = 60.0) -> Any:
     for attempt in range(max_retries):
         try:
@@ -88,7 +102,7 @@ def call_with_retry(func: Callable[[], Any], max_retries: int = 5,
             wait += random.uniform(0, wait * 0.2)
             print(f"[rate-limit] {attempt + 1}/{max_retries}: {e}. Aguardando {wait:.1f}s...")
             time.sleep(wait)
-        except (TransientAPIError, requests.exceptions.RequestException) as e:
+        except TransientAPIError as e:
             if attempt == max_retries - 1:
                 print(f"[error] todas as tentativas falharam: {e}")
                 raise
@@ -97,47 +111,45 @@ def call_with_retry(func: Callable[[], Any], max_retries: int = 5,
             time.sleep(wait)
 
 
-def _post_openrouter(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
-    resp = requests.post(
-        OPENROUTER_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=120,
-    )
-    if resp.status_code == 429:
-        retry_after = resp.headers.get("Retry-After")
-        raise RateLimitError(f"429 do OpenRouter", float(retry_after) if retry_after else None)
-    if resp.status_code in NON_RETRYABLE_STATUS:
-        raise NonRetryableAPIError(f"{resp.status_code}: {resp.text[:300]}")
-    if resp.status_code in RETRYABLE_STATUS:
-        raise TransientAPIError(f"{resp.status_code}: {resp.text[:300]}")
-    resp.raise_for_status()
-    return resp.json()
+def _retry_after_from(e: groq.APIStatusError) -> float | None:
+    try:
+        value = e.response.headers.get("retry-after")
+        return float(value) if value is not None else None
+    except (AttributeError, TypeError, ValueError):
+        return None
 
 
-def call_openrouter(model_id: str, system: str, user: str, technique: str, temperature: float,
-                     seed: int | None, max_retries: int = 5) -> dict[str, Any]:
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise RuntimeError("Defina a variável de ambiente OPENROUTER_API_KEY antes de rodar.")
-
-    payload: dict[str, Any] = {
+def call_groq(model_id: str, system: str, user: str, temperature: float,
+              seed: int | None, technique: str, max_retries: int = 7,
+              max_completion_tokens: int = 300) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
         "model": model_id,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": temperature,
+        "max_completion_tokens": max_completion_tokens,
     }
-
-    reasoning = REASONING_BY_TECHNIQUE.get(technique)
-    if reasoning:
-        payload["reasoning"] = reasoning
-            
-
-    if model_id in JSON_FORMAT_MODELS:
-        payload["response_format"] = {"type": "json_object"}
     if seed is not None:
-        payload["seed"] = seed  # nem todo provedor respeita
+        kwargs["seed"] = seed  # nem todo modelo respeita
 
-    return call_with_retry(lambda: _post_openrouter(payload, api_key), max_retries=max_retries)
+    effort = _reasoning_effort_for(model_id, technique)
+    if effort:
+        kwargs["reasoning_effort"] = effort
+
+    def _do_call() -> dict[str, Any]:
+        try:
+            completion = GROQ_CLIENT.chat.completions.create(**kwargs)
+            return completion.model_dump()
+        except groq.RateLimitError as e:
+            raise RateLimitError(str(e), retry_after=_retry_after_from(e)) from e
+        except groq.APIStatusError as e:
+            if e.status_code in NON_RETRYABLE_STATUS:
+                raise NonRetryableAPIError(f"{e.status_code}: {e.message}") from e
+            raise TransientAPIError(f"{e.status_code}: {e.message}") from e
+        except groq.APIConnectionError as e:
+            raise TransientAPIError(str(e)) from e
+
+    return call_with_retry(_do_call, max_retries=max_retries)
+
 
 
 def parse_model_output(raw: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
@@ -231,8 +243,8 @@ def run_condition(
 
             prompt = build_prompt(essay, technique, structure, few_shot_examples)
             try:
-                raw = call_openrouter(model_id, prompt["system"], prompt["user"],
-                                       technique, temperature, seed, max_retries=max_retries)
+                raw = call_groq(model_id, prompt["system"], prompt["user"],
+                                 temperature, seed, technique, max_retries=max_retries)
                 parsed, failure_reason = parse_model_output(raw)
             except NonRetryableAPIError as e:
                 raw, parsed, failure_reason = None, None, f"api_error: {e}"
@@ -272,7 +284,11 @@ def run_experiments(
     request_delay: float, dry_run: bool, few_shot_examples=None,
     resume: bool = True,
 ) -> None:
-    essays = load_processed_essays(data_path)[:n]
+    essays = load_processed_essays(data_path)
+    if n is not None:
+        rng = random.Random(42)
+        essays = rng.sample(essays, min(n, len(essays)))
+
     print(f"{len(essays)} redações | {len(models)} modelo(s) x "
           f"{len(techniques)} técnica(s) x {len(structures)} estrutura(s)\n")
 
@@ -294,7 +310,7 @@ def run_experiments(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Roda os experimentos de correção automática via OpenRouter.")
+    parser = argparse.ArgumentParser(description="Roda os experimentos de correção automática via Groq.")
     parser.add_argument("--models", nargs="+", choices=MODELS.keys(), default=list(MODELS.keys()))
     parser.add_argument("--techniques", nargs="+", choices=TECHNIQUES, default=list(TECHNIQUES))
     parser.add_argument("--structures", nargs="+", choices=STRUCTURES, default=list(STRUCTURES))
@@ -307,8 +323,8 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=1,
                          help="Execuções por redação. Use 5 com --phase consistencia.")
     parser.add_argument("--dry-run", action="store_true", help="Valida prompts sem chamar a API.")
-    parser.add_argument("--max-retries", type=int, default=5)
-    parser.add_argument("--request-delay", type=float, default=1.0,
+    parser.add_argument("--max-retries", type=int, default=7)
+    parser.add_argument("--request-delay", type=float, default=2.0,
                          help="Segundos entre chamadas bem-sucedidas.")
     parser.add_argument("--no-resume", action="store_true",
                          help="Ignora resultados já salvos e recomeça cada arquivo do zero.")

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import cast
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -292,10 +293,14 @@ def print_summary(df_ann: pd.DataFrame, df_ess: pd.DataFrame, essays: list[dict]
             f"max={df_ess[col].max()}"
         )
 
-    if "essay_year" in df_ess.columns and df_ess["essay_year"].notna().any():
-        print("\n─── Redações por ano ─────────────────────────────────────────")
-        for year, cnt in df_ess["essay_year"].value_counts().sort_index().items():
-            print(f"  {int(year)}: {cnt} redações")
+    if "essay_year" in df_ess.columns:
+        years = pd.to_numeric(df_ess["essay_year"], errors="coerce").dropna()
+        if not years.empty:
+            print("\n─── Redações por ano ─────────────────────────────────────────")
+            year_counts = years.astype(int).value_counts().sort_index()
+            for year_value, cnt in year_counts.items():
+                year_num = int(year_value)
+                print(f"  {year_num}: {cnt} redações")
     print()
 
 
