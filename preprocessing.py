@@ -1,7 +1,6 @@
 """
 Pré-processamento do subconjunto sourceAWithGraders do dataset
-kamel-usp/aes_enem_dataset (Silveira, Barbosa e Mauá, 2024), seguindo a
-Seção 3.1/3.2 da metodologia.
+kamel-usp/aes_enem_dataset (Silveira, Barbosa e Mauá, 2024)
 
 Etapas:
   (i)   Verificação de integridade

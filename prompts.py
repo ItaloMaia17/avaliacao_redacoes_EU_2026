@@ -1,7 +1,4 @@
 """
-Construção dos prompts para as 6 condições do desenho fatorial 3x2
-(Seção 3.4 da metodologia).
-
 Inclui opcionalmente as rubricas de cada competência — recomendado para
 melhorar a qualidade da avaliação, especialmente em modo estruturado e CoT.
 """
