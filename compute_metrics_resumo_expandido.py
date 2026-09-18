@@ -170,7 +170,7 @@ def print_consistency(result: dict[str, Any]) -> None:
         f"  n_redacoes={total_summary.get('n_redacoes', 0):3d} | "
         f"n_runs_esperado={3:d} | "
         f"std_medio={std_medio if std_medio is not None else 'N/A'} | "
-        f"cv_medio={cv_medio if cv_medio is not None else 'N/A'}"
+        f"cv_medio={cv_medio:.2f}%" if cv_medio is not None else "cv_medio=N/A"
     )
 
 

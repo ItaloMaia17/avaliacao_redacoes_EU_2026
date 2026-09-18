@@ -261,7 +261,7 @@ def consistency_metrics(
 
         mean = statistics.mean(values)
         std = statistics.stdev(values)
-        cv = (std / mean) if mean else None
+        cv = (100 * std / mean) if mean else None
 
         per_essay[essay_key] = {
             "n_runs": len(values),
