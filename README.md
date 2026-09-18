@@ -44,7 +44,11 @@ Verifica a montagem dos prompts sem chamar a API.
 
 ```bash
 export GROQ_API_KEY="sk-or-..."
-python run_experiments.py
+
+python run_experiments.py --models qwen3.8-27b --techniques zero-shot --structures estruturada --phase consistencia --repeats 3 --n 100
+
+python run_experiments.py --models gpt-oss-120b --techniques zero-shot --structures estruturada --phase consistencia --repeats 3 --n 100
+
 ```
 
 Os resultados são salvos em `data/results/`.
